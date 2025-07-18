@@ -1,0 +1,372 @@
+import requests
+import json
+import spacy
+import cv2
+import numpy as np
+import os
+from sklearn.cluster import KMeans
+from webcolors import rgb_to_name, hex_to_name
+from spellchecker import SpellChecker
+from PIL import Image
+import numpy as np
+from skimage import color
+from flask import Flask, request, jsonify
+import requests
+from flask_cors import CORS
+import gunicorn
+# Flask uygulamasını başlat
+app = Flask(__name__)
+
+# Azure API bilgileri
+subscription_key = os.getenv("AZURE_SUBSCRIPTION_KEY")
+endpoint = os.getenv("AZURE_ENDPOINT")
+
+CORS(app)
+
+@app.route('/process_image', methods=['POST'])
+def process_image():
+    # Gelen veriyi al
+    print("GELEN İSTEK:", request.json)   # <--- BU
+    data = request.get_json()
+    image_url = data.get('image_url')
+
+    if not image_url:
+        return jsonify({'error': 'image_url is required'}), 400
+
+    result = compVision(image_url)
+    
+    if not result:
+        return jsonify({'error': 'Analysis failed or no clothes detected.'}), 400
+
+    return jsonify(result)
+
+    
+# Geliştirilmiş Kategori Listesi
+categories = {
+    "Top": [
+        "T-shirt", "Sweater", "Blouse", "Hoodie", "Cardigan", "Jumpsuit", "Overalls", "Shirt", "Jersey",
+         "Tunic", "Blazer","Sweatshirt", "Dress","Top"
+    ],
+
+    "Bottom": [
+        "Jean", "Pants", "Skirts", "Trousers", "Shorts", "Leggings",
+         "Jeans","Skirt"
+    ],
+    "Accessory": [
+        "Hat", "Scarf", "Gloves", "Belt", "Bag", "Watch", "Sunglasses", "Glasses",
+        "Earrings", "Necklace", "Bracelet", "Ring", "Brooch", "Tie", "Bow tie", 
+        "Hairband", "Hair clip", "Headscarf", "Wallet", "Backpack"
+    ],
+    "Shoes": [
+        "Sneakers", "Boot", "Sandals", "Heels", "Slippers", "Loafers", 
+        "Flats", "Oxfords", "Shoes","Boots"
+    ],
+    "Outdoor": [
+        "Coat", "Jacket", "Cardigan", "Raincoat", "Trench coat", "Parka", 
+        "Poncho", "Cape", "Overcoat", "Peacoat", "Windbreaker", "Gilet", 
+        "Bomber jacket", "Blazer", "Fleece jacket","Suit","Robe"
+    ],
+
+    "Sport": [
+        "Tracksuit", "Yoga pants", "Sports bra", "Compression shorts", 
+        "Rash guard", "Gym shorts", "Athletic jacket"
+    ]
+
+}
+# Flatten the list of all items for easier search
+all_items = [item.lower() for sublist in categories.values() for item in sublist]
+
+# Initialize spell checker
+spell = SpellChecker()
+
+def analyze_sentence(sentence):
+    """Cümlede kıyafet kategorilerini analizi için"""
+    words = sentence.split()
+    misspelled = spell.unknown(words)
+    found_items = [word for word in words if word.lower() in all_items]
+    return {
+        "misspelled_words": list(misspelled),
+        "found_items": found_items
+    }
+
+def download_image(image_url, save_path="temp_image.jpg"):
+    """Bir URL'den görüntüyü indir ve yerel dosya olarak kaydediyor"""
+    try:
+        response = requests.get(image_url, stream=True)
+        if response.status_code == 200:
+            with open(save_path, 'wb') as file:
+                for chunk in response.iter_content(1024):
+                    file.write(chunk)
+            return save_path
+        else:
+            print(f"Görüntü indirilemedi. Hata Kodu: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Görüntü indirme sırasında hata oluştu: {e}")
+        return None
+  
+    
+
+def closest_css3_color(requested_color, image_path):
+    """Ortalama rengi Lab’a çevir, CSS3 renkleri de Lab’a çevir,
+       Delta‑E ile en yakınını seç."""
+    # 1) Orta 26×26’dan ortalama RGB’yi al
+    img = Image.open(image_path).convert("RGB")
+    w,h = img.size
+    left, top = (w-26)//2, (h-26)//2
+    crop = np.array(img.crop((left, top, left+26, top+26)))
+    mean_rgb = crop.reshape(-1,3).mean(axis=0)[np.newaxis]/255.0  # [ [r,g,b] ] normalleştirilmiş
+
+    # 2) Ortalama Lab
+    mean_lab = color.rgb2lab(mean_rgb)[0]
+    CSS3_HEX_TO_NAMES = {
+            # RED shades
+            "#FFE5E5": "Light Red",
+            "#FFB2B2": "Pink Red",
+            "#FF6666": "Light Red",
+            "#FF0000": "Red",
+            "#CC0000": "Dark Red",
+            "#8B0000": "Deep Red",
+            "#B22222": "Firebrick Red",
+            "#DC143C": "Crimson Red",
+            
+            # BURGUNDY 
+            "#800000": "Burgundy",
+            "#4B0101": "Rich Burgundy",
+            "#3B0000": "Wine Burgundy",
+            "#A52A2A": "A Burgundy",
+
+            # GREEN shades
+            "#E6FFE6": "Light Green",
+            "#B2FFB2": "Mint Green",
+            "#90EE90": "Light Green",
+            "#00FF00": "Green",
+            "#32CD32": "Lime Green",
+            "#228B22": "Forest Green",
+            "#006400": "Dark Green",
+            "#2E8B57": "Sea Green",
+            "#3CB371": "Sea Green",
+            "#008000": "Medium Green",
+
+            # BLUE shades
+            "#E6F0FF": "Light Blue",
+            "#ADD8E6": "Light Blue",
+            "#87CEFA": "Sky Blue",
+            "#4682B4": "Steel Blue",
+            "#0000FF": "Blue",
+            "#4169E1": "Royal Blue",
+            "#0000CD": "Medium Blue",
+            "#00008B": "Dark Blue",
+            "#000080": "Navy Blue",
+            "#191970": "Midnight Blue",
+
+            # YELLOW shades
+            "#FFFFE0": "Light Yellow",
+            "#FFFF99": "Lemon Yellow",
+            "#FFFF00": "Yellow",
+            "#FFD700": "Gold Yellow",
+            "#F4A300": "Light Beige Yellow",
+            "#F5DEB3": "Wheat Yellow",
+            "#EEE8AA": "Pale Goldenrod Yellow",
+            "#F0E68C": "Khaki Yellow",
+            "#B8860B": "Dark Yellow",
+            # Beige
+            "#E1C699": "Beige",
+            # PINK shades
+            "#FFF0F5": "Lavender Blush Pink",
+            "#FFB6C1": "Light Pink",
+            "#FFC0CB": "Pink",
+            "#FF69B4": "Hot Pink",
+            "#FF1493": "Deep Pink",
+            "#DB7093": "Pale Violet Red Pink",
+            "#D87093": "Medium Pink",
+            "#C71585": "Medium Violet Red Pink",
+            "#E75480": "Dark Pink",
+
+            # Mor (Purple) shades
+            "#E6E6FA": "Lavender Purple",
+            "#D8BFD8": "Thistle Purple",
+            "#DDA0DD": "Plum Purple",
+            "#BA55D3": "Medium Orchid Purple",
+            "#9932CC": "Dark Orchid Purple",
+            "#800080": "Purple",
+            "#8A2BE2": "Blue Violet Purple",
+            "#6A0DAD": "Amethyst Purple",
+            "#4B0082": "Indigo Purple",
+            "#3C006B": "Deep Purple Purple",
+
+            # ORANGE shades
+            "#FFE4B5": "A Beige",
+            "#FFDAB9": "Peach Puff Orange",
+            "#FFA07A": "Light Salmon Orange",
+            "#FF7F50": "Coral Orange",
+            "#FF6347": "Tomato Orange",
+            "#FF8C00": "Dark Orange",
+            "#FFA500": "Orange",
+            "#FF7518": "Pumpkin Orange",
+            "#E25822": "Flame Orange",
+            "#FF4500": "Orange Red Orange",
+
+            # BROWN shades
+            "#FFF5E1": "Light Brown Beige",
+            "#EED5B7": "Brown Beige",
+            "#D2B48C": "Tan Brown",
+            "#C19A6B": "Camel Brown",
+            "#A0522D": "Sienna Brown",
+            "#CD853F": "Peru Brown",
+            "#8B4513": "Saddle Brown",
+            "#5C4033": "Dark Brown",
+            "#3E2723": "Chocolate Brown",
+
+            # GRAY shades
+            "#FFFFFF": "White",
+            "#F5F5F5": "Smoke Gray",
+            "#DCDCDC": "Gainsboro Gray",
+            "#D3D3D3": "Light Gray",
+            "#A9A9A9": "Dark Gray",
+            "#808080": "Gray",
+            "#696969": "Dim Gray",
+            "#505050": "Steel Gray",
+            "#2F4F4F": "Dark Gray",
+            "#36454F": "Charcoal Gray",
+
+            # BLACK shades
+            "#2E2E2E": "Dark Gray",
+            "#1C1C1C": "Jet Black",
+            "#111111": "Almost Black",
+            "#000000": "Black",
+            "#0A0A0A": "Charcoal Black",
+            "#101010": "Graphite Black",
+            "#171717": "Pitch Black",
+            "#222222": "Iron Black",
+            "#1A1A1A": "Soft Black",
+            "#0F0F0F": "Obsidian Black",
+        }
+
+    # 3) CSS3 renklerini önceden Lab’a çevir
+    css_lab = {}
+    for hexv, name in CSS3_HEX_TO_NAMES.items():
+        r,g,b = tuple(int(hexv[i:i+2],16) for i in (1,3,5))
+        rgb_norm = np.array([[[r,g,b]]]) / 255.0
+        css_lab[name] = color.rgb2lab(rgb_norm)[0][0]
+
+    # 4) En küçük Delta‑E’yi bul
+    min_de = float('inf')
+    closest = None
+    for name, lab in css_lab.items():
+        de = color.deltaE_ciede2000(mean_lab, lab)
+        if de < min_de:
+            min_de, closest = de, name
+
+    return closest
+
+def get_dominant_color_from_center(image_path, clusters=3, crop_size=100):
+    """Görüntünün ortasından kırpılarak baskın rengi (R,G,B) ve CSS3 adını döner."""
+    image = cv2.imread(image_path)
+    if image is None:
+        print("Görüntü yüklenemedi.")
+        return None, None
+
+    h, w, _ = image.shape
+    cy, cx = h // 2, w // 2
+    hc = crop_size // 2
+
+    cropped = image[cy-hc:cy+hc, cx-hc:cx+hc]
+    cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+    pixels = cropped_rgb.reshape(-1, 3)
+
+    kmeans = KMeans(n_clusters=clusters, random_state=42).fit(pixels)
+    centers = kmeans.cluster_centers_.astype(int)
+    labels, counts = np.unique(kmeans.labels_, return_counts=True)
+    dom_idx = np.argmax(counts)
+    dominant_color = tuple(centers[dom_idx])  # (R, G, B)
+
+    color_name = closest_css3_color(dominant_color, image_path)
+    return dominant_color, color_name
+
+    
+def compVision(image_url):
+    print("COMP VISION HERE")
+    
+    """Azure Vision API ile açıklama al, kıyafet öğesini bul, resmi indir, 
+       baskın renk ve kategori analizi yapar."""
+    # Vision API çağrısı
+    headers = {
+        'Ocp-Apim-Subscription-Key': subscription_key,
+        'Content-Type': 'application/json'
+    }
+    params = {'visualFeatures': 'Description'}
+    data = {"url": image_url}
+
+    resp = requests.post(endpoint + "/vision/v3.2/analyze", 
+                         headers=headers, params=params, json=data)
+    if resp.status_code != 200:
+        print(f"Error: {resp.status_code} - {resp.text}")
+        return None
+
+    analysis = resp.json()
+    captions = analysis.get("description", {}).get("captions", [])
+    if not captions:
+        print("No captions found.")
+        return None
+
+    caption = captions[0]["text"]
+    print(f"Description: {caption}")
+
+    # Cümlede kıyafet öğesini bul
+    answ = analyze_sentence(caption)
+    found_items = answ.get("found_items", [])
+    if not found_items:
+        print("THERE IS NO CLOTHES IN THIS SENTENCE!")
+        return None
+
+    print(f"Found items: {found_items}")
+
+    # Görüntüyü indir
+    img_path = download_image(image_url)
+    if not img_path:
+        print("Görüntü indirilemedi, renk analizi yapılamadı.")
+        return None
+
+    # Baskın rengi al
+    dominant_color, color_name = get_dominant_color_from_center(img_path)
+    if not dominant_color:
+        print("No dominant color detected.")
+        os.remove(img_path)
+        return None
+
+    print("Dominant color is:", dominant_color)
+    print(f"Kıyafetin Baskın Rengi İsmi: {color_name}")
+
+    main_color = color_name.split()[-1] if color_name else None
+    print(main_color)
+
+    # Kategori eşleştirme
+    found_categories = []
+    for category, items in categories.items():
+        for item in found_items:
+            if item.lower() in [i.lower() for i in items]:
+                found_categories.append(category)
+                break
+
+    if not found_categories:
+        print("No matching categories found.")
+        os.remove(img_path)
+        return None
+
+    print(f"Found categories: {found_categories}")
+
+    analyzed = {
+        "category": found_categories[0],
+        "item": found_items[0].capitalize(),
+        "main_color": main_color
+    }
+    print(f"analiz sonucu: {analyzed}")
+
+    # 6) Geçici dosyayı sil ve sonucu döndür
+    os.remove(img_path)
+    return analyzed
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
