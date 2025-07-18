@@ -1,1 +1,425 @@
+import random
+import requests
+import urllib.parse
+from datetime import datetime, timedelta
+import firebase_admin
+from firebase_admin import credentials, firestore
+from flask import Flask, request, jsonify
+import requests
+from flask_cors import CORS
 
+# Kategoriler
+categories = {
+    "Top": {
+        "Sport": {  "cold": [ "Hoodie", "Sweatshirt","Sweater","Cardigan"],
+                    "mild": ["T-shirt", "Bodysuit"],
+                    "hot": ["T-shirt", "Top", "Camisole","Bra"]
+                },
+        
+        "Casual":{  "cold": ["Sweater", "Hoodie", "Tunic", "Blazer", "Sweatshirt"], 
+                    "mild": ["T-shirt", "Blouse", "Jersey", "Camisole", "Tunic", "Bodysuit","Casual Dress"],
+                    "hot": ["T-shirt", "Top", "Camisole","Casual Dress"]
+                },
+        
+        "Entertainment" :{  "cold": [ "Tunic", "Blazer","Blouse","Evening Dress"],
+                            "mild": [ "Blouse", "Tunic", "Bodysuit","Blazer","Evening Dress"],
+                            "hot": ["Blouse","Evening Dress"]
+                        },
+        
+        "Formal" : {    "cold": ["Blouse", "Shirt","Blazer","Tunic"],
+                        "mild": [ "Blouse", "Shirt","Blazer","Tunic"],
+                        "hot": ["Blouse", "Shirt","Tunic"]
+                   }
+        
+    },
+
+    "Bottom": {
+        
+        "Sport": {    "cold": ["Trousers","Joggers","Leggings"],
+                        "mild": ["Trousers","Joggers","Leggings"],
+                        "hot": ["Shorts",  "Leggings"] 
+                },
+        
+        "Casual":{  "cold": ["Jean","Jeans", "Pants","Trousers","Joggers", "Cargo pants"],
+                    "mild": ["Jean","Jeans", "Pants", "Skirt", "Trousers", "Shorts", "Leggings", "Chinos", "Culottes", "Joggers", "Cargo pants"],
+                    "hot": ["Shorts", "Skirt", "Leggings", "Chinos", "Cargo pants","Jean","Jeans", "Pants","Capris"]
+                },
+        
+        "Entertainment" :{  "cold": ["Pants"],
+                            "mild": ["Pants", "Skirt", "Chinos", "Culottes"],
+                            "hot": ["Skirt", "Chinos", "Pants"]
+                        },
+        
+        "Formal" : {    "cold": ["Pants"],
+                        "mild": ["Pants", "Skirt", "Chinos", "Culottes"],
+                        "hot": ["Skirt",  "Chinos", "Pants"]
+                   },
+
+        },
+    
+    
+    
+    "Outdoor": {
+        
+          "Sport": {    "cold": ["Coat", "Jacket", "Raincoat", "Trench Coat", "Parka", "Poncho", "Cape", "Overcoat", "Peacoat", "Windbreaker", "Gilet", "Bomber Jacket", "Fleece Jacket", "Robe"],
+                        "mild": ["Cardigan", "Fleece Jacket"],
+                        "hot": []},
+          
+            "Casual":{  "cold": ["Coat", "Jacket", "Raincoat", "Trench Coat", "Parka", "Poncho", "Cape", "Overcoat", "Peacoat", "Windbreaker", "Gilet", "Bomber Jacket", "Fleece Jacket", "Robe"],
+                        "mild": ["Cardigan", "Fleece Jacket"],
+                        "hot": []
+                },
+        
+            "Entertainment" :{  "cold": ["Coat", "Jacket", "Raincoat", "Trench Coat", "Parka", "Poncho", "Cape", "Overcoat", "Peacoat", "Windbreaker", "Gilet", "Bomber Jacket", "Fleece Jacket", "Robe","Suit"],
+                                "mild": ["Cardigan", "Fleece Jacket","Suit"],
+                                "hot": []
+                        },
+        
+            "Formal" : {    "cold": ["Coat", "Jacket", "Raincoat", "Trench Coat", "Parka", "Poncho", "Cape", "Overcoat", "Peacoat", "Windbreaker", "Gilet", "Bomber Jacket", "Fleece Jacket", "Robe","Suit"],
+                            "mild": ["Cardigan", "Fleece Jacket","Jacket", "Raincoat", "Coat","Bomber Jacket"],
+                            "hot": []
+                   },
+      
+     },
+    
+   "Accessory": {
+        "Sport": {"cold": ["Hat", "Scarf", "Gloves"], "mild": ["Sunglasses", "Watch"], "hot": ["Sunglasses", "Hat"]},
+        "Casual": {"cold": ["Hat", "Scarf", "Gloves","Belt"], "mild": ["Sunglasses", "Watch","Belt"], "hot": ["Sunglasses", "Hat"]},
+        "Formal": {"cold": ["Scarf", "Gloves","Belt"], "mild": ["Watch","Belt"], "hot": ["Sunglasses","Belt"]},
+        "Entertainment": {"cold": ["Hat", "Scarf","Necklaces","Ring"], "mild": ["Sunglasses", "Watch","Necklaces","Ring"], "hot": ["Sunglasses","Watch","Necklaces","Ring"]}
+    },
+    
+   "Shoes": {
+        "Sport": { "cold": ["Boots"], 
+                  "mild": ["Sneakers", "Loafers", "Moccasins"],
+                  "hot": ["Sneakers", "Loafers", "Moccasins", "Espadrilles"]},
+        
+        "Formal": { "cold": ["Ankle boots","Boots","Loafers","Flats"], 
+                   "mild": ["Loafers", "Oxfords", "Derby Shoes","Heels","Flats"],
+                   "hot": ["Loafers", "Oxfords", "Derby Shoes","Heels"]},
+        
+        "Casual": {"cold": ["Boots"],
+                   "mild": ["Sneakers","Moccasins", "Espadrilles", "Ballet Flats", "Oxfords", "Derby Shoes", "Flats"],
+                   "hot": ["Sneakers","Espadrilles", "Ballet Flats", "Flats"]},
+        
+        "Entertainment": { "cold": ["Ankle boots","High Heels","Heels"], 
+                          "mild": ["Loafers", "Oxfords", "Derby Shoes","High Heels","Heels"],
+                          "hot": ["Espadrilles", "Ballet Flats", "Oxfords", "Derby Shoes","High Heels","Heels"]}
+    }
+
+}
+
+# Renk uyumluluk listesi
+color_combinations = {
+    "Gray": ["Black", "White", "Blue", "Red", "Green","Gray", "Purple"],
+    "Red": ["Black", "White", "Gray","Beige","Brown"],
+    "Burgundy": ["Black", "White", "Gray","Beige","Pink","Brown","Burgundy"],
+    "Purple": ["Black", "White", "Gray", "Beige","Blue", "Purple"],
+    "Green": ["Black", "White", "Gray","Green"],
+    "Blue": ["Black", "Gray", "Red", "Green", "Blue", "Yellow", "Pink", "Orange", "Beige", "Brown", "White","Colorful","White", "Purple" ],
+    "Yellow": ["Black", "White", "Gray","Beige","YelLow"],
+    "Pink": ["Black", "White", "Gray","Pink"],
+    "Orange": ["Black", "White", "Gray","Orange"],
+    "Beige": ["Black", "White", "Blue","Colorful","Beige", "Purple"],
+    "Brown": ["Black", "White", "Beige","Brown"],
+    "White": ["Black", "Gray", "Red", "Green", "Blue", "Yellow", "Pink", "Orange", "Beige", "Brown", "White","Colorful","White", "Purple" ],
+    "Black": ["White", "Gray", "Red", "Green", "Blue", "Yellow", "Pink", "Orange", "Beige", "Brown", "Black","Colorful","Black", "Purple"],
+    "Gold": ["Black", "White", "Gray", "Red", "Green", "Blue", "Yellow", "Pink", "Orange", "Beige", "Brown", "Purple"],
+    "Silver": ["Black", "White", "Gray", "Red", "Green", "Blue", "Yellow", "Pink", "Orange", "Beige", "Brown"],
+    "Colorful": ["Black", "White", "Gray","Colorful","Beige"]
+}
+
+app = Flask(__name__)
+CORS(app)
+@app.route("/receive_data", methods=["POST"])
+def receive_data():
+
+    try:
+        data = request.get_json()  # Extract JSON request body
+        print("Received data:", data) 
+        
+        event_type = data.get("event")
+        event_date = data.get("date")
+        city = data.get("location")
+        target_email = data.get("email")
+
+        if not all([target_email, city, event_date, event_type]):
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        result = get_weather(target_email, city, event_date, event_type)
+
+        if result:
+            return jsonify(result), 200
+        else:
+            return jsonify({"error": "Could not fetch weather data"}), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    
+def get_weather(target_email,city, event_date,event_type):
+    
+    # Gelen tarih bilgisini uygun formata çevir
+    if isinstance(event_date, str):  
+        try:
+            if "/" in event_date:  # 10/02/2025 gibi bir tarih formatı geldiyse
+                event_date = datetime.strptime(event_date, "%d/%m/%Y").date()
+                print("here 1")
+            else:  # 7 gibi bir sayı geldiyse, o kadar gün sonrası olarak kabul et
+                event_date = datetime.now().date() + timedelta(days=int(event_date))
+                print("here 2")
+
+        except ValueError:
+            return None  # Hatalı tarih formatı varsa işlem yapma
+
+    # Şehir adını URL için güvenli hale getir
+    city_encoded = urllib.parse.quote(city)
+    api_key = "***"
+    base_url = f"http://api.openweathermap.org/data/2.5/forecast?q={city_encoded}&appid={api_key}&units=metric"
+    try:
+        response = requests.get(base_url)
+        if response.status_code == 200:
+            weather_data = response.json()
+            
+            # API yanıtını kontrol et
+            if "list" not in weather_data:
+                print("Error: Weather data does not contain 'list'.")
+                return None
+    
+            forecast_list = weather_data["list"]
+            print(event_date)
+            print(forecast_list)
+            # Debug: API'den gelen verileri kontrol et
+            print("Available forecast dates:")
+            for f in forecast_list:
+                print(f["dt_txt"])  # Mevcut tüm tarihleri yazdıralım
+    
+            # Belirtilen tarihe ait sıcaklıkları filtrele
+            temperatures = [
+                f["main"]["temp"]
+                for f in forecast_list
+                if datetime.strptime(f["dt_txt"], "%Y-%m-%d %H:%M:%S").date() == event_date
+            ]
+    
+            # Debug: Eşleşen sıcaklıklar
+            print("Matching temperatures:", temperatures)
+    
+            # Ortalama sıcaklığı hesapla
+            if temperatures:
+                average_temp = sum(temperatures) / len(temperatures)
+                print(f"Average Temperature on {event_date}: {average_temp:.2f}°C")
+    
+                latest_weather = int(average_temp)
+                print(f"Type of latest_weather: {type(latest_weather)}")  
+                print(f"Value of latest_weather: {latest_weather}") 
+                okey = suggest_clothing(target_email, event_type, latest_weather)
+            else:
+                print(f"No valid temperatures found for {event_date}.")
+                okey = None
+    
+            return okey
+        else:
+            print(f"Error: API request failed with status code {response.status_code}")
+            return None
+    
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        return None
+
+    
+def suggest_clothing(target_email,event_type, latest_weather):
+    if latest_weather <= 10:
+        season = "cold"
+    elif 10 < latest_weather <= 16:
+        season = "mild"
+    else:
+        season = "hot"
+
+    if not firebase_admin._apps:
+        # Firebase ile bağlantı kurmak için hizmet hesabı JSON dosyasının yolunu belirtiyoruz
+        cred = credentials.Certificate('***')  # JSON dosyasının yolu')  # JSON dosyasının yolu
+        firebase_admin.initialize_app(cred)
+
+# Firestore veritabanına erişim sağlıyoruz
+    db = firestore.client()
+
+    print("here")
+    # Firestore'daki 'Clothe' koleksiyonundan, email'i belirli olan kullanıcıları sorguluyoruz
+    users_ref = db.collection('Clothe')  # Koleksiyon adı 'Clothe'
+    query = users_ref.where('email', '==', target_email)  # 'email' alanına göre filtreleme
+    docs = query.stream()  # Sadece bu e-posta adresine sahip belgeleri çekiyoruz
+    db_clothes = []
+
+    # Verileri listeye ekliyoruz
+    for doc in docs:
+        data = doc.to_dict()  # Belgeyi sözlük olarak alıyoruz
+    # Tip dönüştürme: Eğer 'Dress' ise, onu 'Top' olarak değiştir
+    
+        original_type = data.get("type", "")
+        normalized_type = original_type
+
+        if normalized_type == "Dress":
+            final_type = "Top"
+            # final_subtype = data.get("subtype", "Dress")  # subtype boşsa 'Dress' olarak ayarla
+        else:
+            final_type = original_type
+            # final_subtype = data.get("subtype", "")
+
+        clothe_data = {
+            "type": final_type,
+            "subtype": data.get("subtype", ""),
+            "colour": data.get("colour", ""),
+            "gorselurl": data.get("gorselurl", "")
+        }
+
+        db_clothes.append(clothe_data)  # Veriyi listeye ekliyoruz
+
+    # Önce Top'u seç
+   
+    available_Top = [item for item in db_clothes if item["type"] == "Top" and item["subtype"] in categories["Top"][event_type][season]]
+    print(f"Available Top: {available_Top}")  # Debugging line
+    if not available_Top:
+        print("No available Top for this selection.")
+        return None
+    choosed_Top = random.choice(available_Top)
+
+    Top_type = choosed_Top["subtype"]
+    Top_colour = choosed_Top["colour"]
+   
+    available_Shoes = [item for item in db_clothes if item["type"] == "Shoes" and item["subtype"] in categories["Shoes"][event_type][season] and item["colour"] in color_combinations[Top_colour]]
+    if not available_Shoes:
+            print("yedek Shoes seçiliyor")
+
+            available_Shoes = [item for item in db_clothes if item["type"] == "Shoes"]                              
+    print(f"Chosen Top: {choosed_Top}")
+    suggested_outfit = []
+
+    if Top_type=="Casual Dress" or Top_type=="Evening Dress" :
+        print("It is a dress")
+                
+        choosed_outdoor = None  # Initialize before the condition
+        if season in ["cold", "mild"]:
+            available_outdoor = [item for item in db_clothes if item["type"] == "Outdoor" ]
+            print(f"available_outdoor listesi: {available_outdoor}")  # Debugging
+
+            # choosed_outdoor = {'type': 'Outdoor', 'subtype': ' ', 'colour': ' '}  # Varsayılan atama
+            if available_outdoor:  # Eğer uygun bir dış giyim varsa, rastgele birini seç
+                choosed_outdoor = random.choice(available_outdoor)
+                print("available varrrrr")
+                outfit = {
+                "Top": choosed_Top,
+                "Outdoor": choosed_outdoor,
+                "Shoes": random.choice(available_Shoes) if available_Shoes else None,
+            }
+            else:
+                print("available yokkkk")
+                choosed_outdoor = {'type': 'Outdoor', 'subtype': ' ', 'colour': ' '}
+                outfit = {
+                    "Top": choosed_Top,
+                    "Outdoor": choosed_outdoor,
+                    "Shoes": random.choice(available_Shoes) if available_Shoes else None,
+                }
+                
+            suggested_outfit = [
+            {
+                "email": target_email,
+                "type": v["type"],
+                "subtype": v["subtype"],
+                "colour": v["colour"],
+                "gorselurl": v["gorselurl"]
+            }
+            for k, v in outfit.items() if v
+                ]
+           
+        else:
+            outfit = {
+                "Top": choosed_Top,
+                "Shoes": random.choice(available_Shoes) if available_Shoes else None,
+            }  
+            suggested_outfit = [
+                    {
+                        "email": target_email,
+                        "type": v["type"],
+                        "subtype": v["subtype"],
+                        "colour": v["colour"],
+                        "gorselurl": v["gorselurl"]
+                    }
+                    for k, v in outfit.items() if v
+                ]
+        
+    else: 
+                # Diğer kategorileri Top'un rengine göre filtrele
+        available_Bottom = [item for item in db_clothes if item["type"] == "Bottom" and item["subtype"] in categories["Bottom"][event_type][season] and item["colour"] in color_combinations[Top_colour]]
+        if not available_Bottom:
+            print("yedek bottom seçiliyor")
+            available_Bottom = [item for item in db_clothes if item["type"] == "Bottom"]
+
+                    
+            
+        available_Accessory = [item for item in db_clothes if item["type"] == "Accessory" and item["subtype"] in categories["Accessory"][event_type][season] and item["colour"] in color_combinations[Top_colour]]
+       
+        available_Shoes = [item for item in db_clothes if item["type"] == "Shoes" and item["subtype"] in categories["Shoes"][event_type][season] and item["colour"] in color_combinations[Top_colour]]
+        if not available_Shoes:
+            print("yedek Shoes seçiliyor")
+
+            available_Shoes = [item for item in db_clothes if item["type"] == "Shoes"]                              
+        # Seçilen öğelerden rastgele bir kombin oluştur
+        choosed_outdoor = None  # Initialize before the condition
+        if season in ["cold", "mild"]:
+            available_outdoor = [item for item in db_clothes if item["type"] == "Outdoor" ]
+            print(f"available_outdoor listesi: {available_outdoor}")  # Debugging
+
+          
+            if available_outdoor:  # Eğer uygun bir dış giyim varsa, rastgele birini seç
+                choosed_outdoor = random.choice(available_outdoor)
+                print("available varrrrr")
+                outfit = {
+                "Top": choosed_Top,
+                "Bottom": random.choice(available_Bottom) if available_Bottom else None,
+                "Outdoor": choosed_outdoor,
+                "Shoes": random.choice(available_Shoes) if available_Shoes else None,
+            }
+            else:
+                print("available yokkkk")
+                choosed_outdoor = {'type': 'Outdoor', 'subtype': ' ', 'colour': ' '}
+
+           
+        else:
+            outfit = {
+                "Top": choosed_Top,
+                "Bottom": random.choice(available_Bottom) if available_Bottom else None,
+                "Shoes": random.choice(available_Shoes) if available_Shoes else None,
+            }  
+        suggested_outfit = [
+            {
+                "email": target_email,
+                "type": v["type"],
+                "subtype": v["subtype"],
+                "colour": v["colour"],
+                "gorselurl": v["gorselurl"]
+            }
+    for k, v in outfit.items() if v
+]
+        print("It is not a dress")
+   
+
+    # Kombin önerisi
+    
+    if event_type in categories["Top"]:
+        if suggested_outfit:
+            print(f"Önerilen kombin: {suggested_outfit}")
+
+            
+        else:
+            print("Bu sıcaklık ve etkinlik türü için uygun bir kombin bulunamadı.")
+            return "outfit gelmedi"
+
+    else:
+        print("Geçersiz etkinlik türü seçtiniz!")
+
+
+    return suggested_outfit 
+
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5001)
